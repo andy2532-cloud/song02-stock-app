@@ -117,8 +117,9 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                     pass
                 return ""
 
-            # 判斷是否為中國股市：顯示 3 位小數點；其他市場顯示 2 位
-            if "中國" in market_name or "CN" in market_name.upper():
+            # 判斷中國或美國股市：顯示 3 位小數點；其餘（如台股）顯示 2 位
+            market_upper = market_name.upper()
+            if any(k in market_upper for k in ["中國", "CN", "美國", "US"]):
                 price_format = "{:.3f}"
             else:
                 price_format = "{:.2f}"
