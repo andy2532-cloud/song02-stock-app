@@ -32,7 +32,7 @@ def get_stock_info(stock_dict):
         )
     }
 
-    # 先用 TWSE API 批次抓取上市上櫃資料
+    # 先用 TWSE API 批次抓取台股上市上櫃資料
     stock_data_map = {}
     try:
         res = requests.get(url, headers=headers, timeout=4)
@@ -70,7 +70,7 @@ def get_stock_info(stock_dict):
             except Exception:
                 pass
 
-        # 軌道 B: 若 TWSE 抓不到 (例如興櫃股票 6618.TWO 或外國股票)，自動改用 yfinance
+        # 軌道 B: 若 TWSE 抓不到 (興櫃股票、陸股、美股等)，自動改用 yfinance
         if current_price is None:
             try:
                 stock_obj = yf.Ticker(str(code))
@@ -117,10 +117,16 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                     pass
                 return ""
 
+            # 判斷是否為中國股市：顯示 3 位小數點；其他市場顯示 2 位
+            if "中國" in market_name or "CN" in market_name.upper():
+                price_format = "{:.3f}"
+            else:
+                price_format = "{:.2f}"
+
             st.dataframe(
                 df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
                 .format(
-                    "{:.2f}",
+                    price_format,
                     subset=["當前價格", "漲跌", "漲跌幅(%)"],
                     na_rep="-",
                 ),
