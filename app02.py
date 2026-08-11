@@ -17,35 +17,33 @@ def get_twse_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
 
-    # 1. 同時產生 tse (上市) 與 otc (上櫃) 的查詢代號
+    # 1. 清除 .TW 與 .TWO 後綴，取出純數字代號 (例如 2330.TW -> 2330)
     targets = []
     for code in stock_dict.keys():
-        targets.append(f"tse_{code}.tw")
-        targets.append(f"otc_{code}.tw")
+        clean_code = str(code).split(".")[0]
+        targets.append(f"tse_{clean_code}.tw")
+        targets.append(f"otc_{clean_code}.tw")
 
     query_tickers = "|".join(targets)
-
-    # 加上 timestamp 防止證交所快取
     url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={query_tickers}&_={int(time.time()*1000)}"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
     }
 
     try:
         res = requests.get(url, headers=headers, timeout=5)
         msg_array = res.json().get("msgArray", [])
-
-        # 以股票代號建立對照表
         stock_data_map = {item["c"]: item for item in msg_array}
     except Exception:
         stock_data_map = {}
 
     df_list = []
     for code, name in stock_dict.items():
-        item = stock_data_map.get(str(code))
+        # 2. 比對時使用純數字代號
+        clean_code = str(code).split(".")[0]
+        item = stock_data_map.get(clean_code)
 
         if item:
             try:
@@ -68,7 +66,7 @@ def get_twse_stock_info(stock_dict):
 
                 df_list.append({
                     "名稱": name,
-                    "股票代號": code,
+                    "股票代號": code,  # 保留原始顯示欄位
                     "當前價格": current_price,
                     "漲跌": change,
                     "漲跌幅(%)": change_pct,
@@ -124,7 +122,7 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                 height=300,
             )
 
-# 處理台北時間與整理按鈕
+# 處理台北時間與重新整理按鈕
 taipei_tz = pytz.timezone("Asia/Taipei")
 now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
