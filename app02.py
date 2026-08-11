@@ -1,61 +1,76 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
+import requests
 from datetime import datetime
 import pytz
-# --- 重點：從 stocks02.py 匯入清單 ---
-from stocks02 import market_configs
+# --- 從 stocks.py 匯入清單 ---
+from stocks import market_configs
 
-# 設定網頁標題
-st.set_page_config(page_title="台灣股票-02", layout="wide")
+st.set_page_config(page_title="全球股票監控", layout="wide")
+st.markdown("#### 📊 全球股市即時監控 (TWSE API 模式)")
 
-# 1. 調整標題大小
-st.markdown("#### 📊 台灣股市即時監控02 (Excel 模式)")
-
-def get_stock_info(stock_dict):
+def get_twse_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
     
-    df_list = []
-    for ticker, name in stock_dict.items():
-        try:
-            stock_obj = yf.Ticker(ticker)
-            info = stock_obj.fast_info
-            
-            current_price = info['last_price']
-            prev_close = info['previous_close']
-            
-            if prev_close is None or prev_close == 0:
-                prev_close = stock_obj.info.get('previousClose', current_price)
-            
-            change = current_price - prev_close
-            change_pct = (change / prev_close) * 100
-            
-            df_list.append({
-                "名稱": name,
-                "股票代號": ticker,
-                "當前價格": float(current_price),
-                "漲跌": float(change),
-                "漲跌幅(%)": float(change_pct)
-            })
-        except:
-            df_list.append({"名稱": name, "股票代號": ticker, "當前價格": None, "漲跌": None, "漲跌幅(%)": None})
+    # 將代號組合成 TWSE 要求的格式，例如: tse_2330.tw|tse_2317.tw
+    # 支援上市 (tse) 與 上櫃 (otc)，可統一先用 tse 或同時查詢
+    query_tickers = "|".join([f"tse_{code}.tw" for code in stock_dict.keys()])
+    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={query_tickers}"
     
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        data = res.json()
+        msg_array = data.get('msgArray', [])
+        
+        # 轉成字典以便快速對照: {'2330': {資料...}}
+        stock_data_map = {item['c']: item for item in msg_array}
+    except Exception as e:
+        stock_data_map = {}
+
+    df_list = []
+    for code, name in stock_dict.items():
+        item = stock_data_map.get(str(code))
+        
+        if item:
+            try:
+                # z: 最近成交價, y: 昨收價
+                # 若盤前未成交，z 可能為 '-'，可退而取最佳叫買價 b
+                current_price = float(item['z']) if item.get('z') != '-' else float(item['b'].split('_')[0])
+                prev_close = float(item['y'])
+                
+                change = current_price - prev_close
+                change_pct = (change / prev_close) * 100
+                
+                df_list.append({
+                    "名稱": name,
+                    "股票代號": code,
+                    "當前價格": current_price,
+                    "漲跌": change,
+                    "漲跌幅(%)": change_pct
+                })
+            except (ValueError, KeyError, IndexError):
+                df_list.append({"名稱": name, "股票代號": code, "當前價格": None, "漲跌": None, "漲跌幅(%)": None})
+        else:
+            df_list.append({"名稱": name, "股票代號": code, "當前價格": None, "漲跌": None, "漲跌幅(%)": None})
+
     return pd.DataFrame(df_list)
 
-# 2. 建立 Excel 分頁
+# 頁面與表格渲染
 tabs = st.tabs(list(market_configs.keys()))
 
 for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
         st.write(f"**{market_name} 即時行情**")
-        df = get_stock_info(stock_dict)
+        df = get_twse_stock_info(stock_dict)
         
         if not df.empty:
             def color_change(val):
                 try:
-                    if val > 0: return 'color: #ff4b4b;'
-                    elif val < 0: return 'color: #008000;'
+                    if val > 0: return 'color: #ff4b4b;' # 紅漲
+                    elif val < 0: return 'color: #008000;' # 綠跌
                 except: pass
                 return ''
 
@@ -66,12 +81,12 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                 height=300
             )
 
-# 3. 處理台北時間
+# 時間顯示
 taipei_tz = pytz.timezone('Asia/Taipei')
 now_taipei = datetime.now(taipei_tz).strftime('%Y-%m-%d %H:%M:%S')
 
 st.caption(f"最後更新時間 (台北): {now_taipei}")
-st.caption("註：免費數據通常有 15 分鐘延遲。")
+st.caption("註：資料來源為臺灣證券交易所 (TWSE MIS)。")
 
 if st.button('🔄 點擊刷新價格'):
     st.rerun()
