@@ -3,8 +3,8 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime
 import pytz
-# --- 重點：從 stocks.py 匯入清單 ---
-from stocks import market_configs
+# --- 重點：從 stocks02.py 匯入清單 ---
+from stocks02 import market_configs
 
 # 設定網頁標題
 st.set_page_config(page_title="台灣股票-02", layout="wide")
