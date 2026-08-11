@@ -1,62 +1,135 @@
 import time
+from datetime import datetime
+import pandas as pd
+import pytz
+import requests
+import streamlit as st
+
+# --- 從 stocks02.py 匯入清單 ---
+from stocks02 import market_configs
+
+# 設定網頁標題
+st.set_page_config(page_title="全球股票監控", layout="wide")
+st.markdown("#### 📊 全球股市即時監控 (TWSE API 模式)")
+
 
 def get_twse_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
-    
-    # 1. 同時產生 tse (上市) 與 otc (上櫃) 的查詢字串
+
+    # 1. 同時產生 tse (上市) 與 otc (上櫃) 的查詢代號
     targets = []
     for code in stock_dict.keys():
         targets.append(f"tse_{code}.tw")
         targets.append(f"otc_{code}.tw")
-    
+
     query_tickers = "|".join(targets)
-    # 加上 timestamp 避免證交所快取或阻擋
+
+    # 加上 timestamp 防止證交所快取
     url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={query_tickers}&_={int(time.time()*1000)}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+
     try:
         res = requests.get(url, headers=headers, timeout=5)
-        msg_array = res.json().get('msgArray', [])
-        
-        # 整理抓到的資料
-        stock_data_map = {}
-        for item in msg_array:
-            stock_data_map[item['c']] = item
+        msg_array = res.json().get("msgArray", [])
+
+        # 以股票代號建立對照表
+        stock_data_map = {item["c"]: item for item in msg_array}
     except Exception:
         stock_data_map = {}
 
     df_list = []
     for code, name in stock_dict.items():
         item = stock_data_map.get(str(code))
-        
+
         if item:
             try:
                 # 盤後或未成交時 z 會是 "-"，依序向買價(b)、賣價(a)、昨收(y) 取值備援
-                price_str = item.get('z', '-')
-                if price_str == '-':
-                    price_str = item.get('b', '_').split('_')[0] # 買價
-                if price_str == '-' or not price_str:
-                    price_str = item.get('a', '_').split('_')[0] # 賣價
-                if price_str == '-' or not price_str:
-                    price_str = item.get('y', '0')              # 昨收價
-                
+                price_str = item.get("z", "-")
+                if price_str == "-":
+                    price_str = item.get("b", "_").split("_")[0]
+                if price_str == "-" or not price_str:
+                    price_str = item.get("a", "_").split("_")[0]
+                if price_str == "-" or not price_str:
+                    price_str = item.get("y", "0")
+
                 current_price = float(price_str)
-                prev_close = float(item['y'])
-                
+                prev_close = float(item.get("y", 0))
+
                 change = current_price - prev_close
-                change_pct = (change / prev_close) * 100 if prev_close else 0
-                
+                change_pct = (
+                    (change / prev_close) * 100 if prev_close else 0
+                )
+
                 df_list.append({
                     "名稱": name,
                     "股票代號": code,
                     "當前價格": current_price,
                     "漲跌": change,
-                    "漲跌幅(%)": change_pct
+                    "漲跌幅(%)": change_pct,
                 })
             except (ValueError, KeyError, IndexError):
-                df_list.append({"名稱": name, "股票代號": code, "當前價格": None, "漲跌": None, "漲跌幅(%)": None})
+                df_list.append({
+                    "名稱": name,
+                    "股票代號": code,
+                    "當前價格": None,
+                    "漲跌": None,
+                    "漲跌幅(%)": None,
+                })
         else:
-            df_list.append({"名稱": name, "股票代號": code, "當前價格": None, "漲跌": None, "漲跌幅(%)": None})
+            df_list.append({
+                "名稱": name,
+                "股票代號": code,
+                "當前價格": None,
+                "漲跌": None,
+                "漲跌幅(%)": None,
+            })
 
     return pd.DataFrame(df_list)
+
+
+# 建立頁面 Tabs 分頁
+tabs = st.tabs(list(market_configs.keys()))
+
+for i, (market_name, stock_dict) in enumerate(market_configs.items()):
+    with tabs[i]:
+        st.write(f"**{market_name} 即時行情**")
+        df = get_twse_stock_info(stock_dict)
+
+        if not df.empty:
+
+            def color_change(val):
+                try:
+                    if val > 0:
+                        return "color: #ff4b4b;"  # 紅漲
+                    elif val < 0:
+                        return "color: #008000;"  # 綠跌
+                except:
+                    pass
+                return ""
+
+            st.dataframe(
+                df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
+                .format(
+                    "{:.2f}",
+                    subset=["當前價格", "漲跌", "漲跌幅(%)"],
+                    na_rep="-",
+                ),
+                use_container_width=True,
+                height=300,
+            )
+
+# 處理台北時間與整理按鈕
+taipei_tz = pytz.timezone("Asia/Taipei")
+now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+st.caption(f"最後更新時間 (台北): {now_taipei}")
+st.caption("註：資料來源為臺灣證券交易所 (TWSE MIS)。")
+
+if st.button("🔄 點擊刷新價格"):
+    st.rerun()
