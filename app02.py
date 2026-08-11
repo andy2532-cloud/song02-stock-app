@@ -4,20 +4,20 @@ import pandas as pd
 import pytz
 import requests
 import streamlit as st
+import yfinance as yf
 
 # --- 從 stocks02.py 匯入清單 ---
 from stocks02 import market_configs
 
-# 設定網頁標題
 st.set_page_config(page_title="全球股票監控", layout="wide")
-st.markdown("#### 📊 全球股市即時監控 (TWSE API 模式)")
+st.markdown("#### 📊 全球股市即時監控 (雙軌智慧模式)")
 
 
-def get_twse_stock_info(stock_dict):
+def get_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
 
-    # 1. 清除 .TW 與 .TWO 後綴，取出純數字代號 (例如 2330.TW -> 2330)
+    # 1. 整理清單，去除 .TW / .TWO 產出 TWSE 查詢字串
     targets = []
     for code in stock_dict.keys():
         clean_code = str(code).split(".")[0]
@@ -32,22 +32,27 @@ def get_twse_stock_info(stock_dict):
         )
     }
 
+    # 先用 TWSE API 批次抓取上市上櫃資料
+    stock_data_map = {}
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=4)
         msg_array = res.json().get("msgArray", [])
         stock_data_map = {item["c"]: item for item in msg_array}
     except Exception:
-        stock_data_map = {}
+        pass
 
     df_list = []
     for code, name in stock_dict.items():
-        # 2. 比對時使用純數字代號
         clean_code = str(code).split(".")[0]
         item = stock_data_map.get(clean_code)
 
+        current_price = None
+        change = None
+        change_pct = None
+
+        # 軌道 A: TWSE API 成功抓到上市/上櫃資料
         if item:
             try:
-                # 盤後或未成交時 z 會是 "-"，依序向買價(b)、賣價(a)、昨收(y) 取值備援
                 price_str = item.get("z", "-")
                 if price_str == "-":
                     price_str = item.get("b", "_").split("_")[0]
@@ -58,46 +63,47 @@ def get_twse_stock_info(stock_dict):
 
                 current_price = float(price_str)
                 prev_close = float(item.get("y", 0))
+                change = current_price - prev_close
+                change_pct = (
+                    (change / prev_close) * 100 if prev_close else 0
+                )
+            except Exception:
+                pass
+
+        # 軌道 B: 若 TWSE 抓不到 (例如興櫃股票 6618.TWO 或外國股票)，自動改用 yfinance
+        if current_price is None:
+            try:
+                stock_obj = yf.Ticker(str(code))
+                info = stock_obj.fast_info
+
+                current_price = float(info["last_price"])
+                prev_close = float(info["previous_close"])
 
                 change = current_price - prev_close
                 change_pct = (
                     (change / prev_close) * 100 if prev_close else 0
                 )
+            except Exception:
+                pass
 
-                df_list.append({
-                    "名稱": name,
-                    "股票代號": code,  # 保留原始顯示欄位
-                    "當前價格": current_price,
-                    "漲跌": change,
-                    "漲跌幅(%)": change_pct,
-                })
-            except (ValueError, KeyError, IndexError):
-                df_list.append({
-                    "名稱": name,
-                    "股票代號": code,
-                    "當前價格": None,
-                    "漲跌": None,
-                    "漲跌幅(%)": None,
-                })
-        else:
-            df_list.append({
-                "名稱": name,
-                "股票代號": code,
-                "當前價格": None,
-                "漲跌": None,
-                "漲跌幅(%)": None,
-            })
+        df_list.append({
+            "名稱": name,
+            "股票代號": code,
+            "當前價格": current_price,
+            "漲跌": change,
+            "漲跌幅(%)": change_pct,
+        })
 
     return pd.DataFrame(df_list)
 
 
-# 建立頁面 Tabs 分頁
+# 分頁與表格渲染
 tabs = st.tabs(list(market_configs.keys()))
 
 for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
         st.write(f"**{market_name} 即時行情**")
-        df = get_twse_stock_info(stock_dict)
+        df = get_stock_info(stock_dict)
 
         if not df.empty:
 
@@ -122,12 +128,12 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                 height=300,
             )
 
-# 處理台北時間與重新整理按鈕
+# 時間顯示
 taipei_tz = pytz.timezone("Asia/Taipei")
 now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 st.caption(f"最後更新時間 (台北): {now_taipei}")
-st.caption("註：資料來源為臺灣證券交易所 (TWSE MIS)。")
+st.caption("註：上市上櫃資料來自 TWSE MIS；興櫃及海外股市資料來自 yfinance。")
 
 if st.button("🔄 點擊刷新價格"):
     st.rerun()
