@@ -3,8 +3,8 @@ import pandas as pd
 import requests
 from datetime import datetime
 import pytz
-# --- 從 stocks.py 匯入清單 ---
-from stocks import market_configs
+# --- 從 stocks02.py 匯入清單 ---
+from stocks02 import market_configs
 
 st.set_page_config(page_title="全球股票監控", layout="wide")
 st.markdown("#### 📊 全球股市即時監控 (TWSE API 模式)")
