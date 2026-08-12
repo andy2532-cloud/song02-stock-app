@@ -12,32 +12,52 @@ import yfinance as yf
 from stocks02 import market_configs
 
 st.set_page_config(page_title="全球股票監控", layout="wide")
-st.markdown("#### 📊 全球股市即時監控 (雙軌智慧模式)")
+st.markdown("#### 📊 全球股市即時監控 (線上編輯與策略試算)")
 
 # 暫存檔名稱
-CACHE_FILE = "stock_order_cache.json"
+ORDER_CACHE_FILE = "stock_order_cache.json"
+USER_DATA_FILE = "user_custom_data.json"
 
 
-# 讀取暫存檔
+# 1. 讀取與寫入「排序」暫存檔
 def load_order_cache():
-    if os.path.exists(CACHE_FILE):
+    if os.path.exists(ORDER_CACHE_FILE):
         try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            with open(ORDER_CACHE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
 
-# 寫入暫存檔
 def save_order_cache(cache_data):
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        with open(ORDER_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
 
+# 2. 讀取與寫入「用戶輸入自訂數據」（預期買賣價、成本、數量、策略等）
+def load_user_data():
+    if os.path.exists(USER_DATA_FILE):
+        try:
+            with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_user_data(user_data):
+    try:
+        with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# 3. 雙軌抓取即時股價
 def get_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
@@ -118,37 +138,35 @@ def get_stock_info(stock_dict):
     return pd.DataFrame(df_list)
 
 
-# 取得台北目前時間
+# 取得台北時間
 taipei_tz = pytz.timezone("Asia/Taipei")
 now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-# 載入歷史儲存順序
-saved_cache = load_order_cache()
+# 讀取快取
+saved_order_cache = load_order_cache()
+saved_user_data = load_user_data()
 
 tabs = st.tabs(list(market_configs.keys()))
 
 for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
-        # --- 頂部橫向整排佈局 (標題 | 刷新按鈕 | 最後更新時間) ---
+        # --- 頂部橫向整排佈局 ---
         col1, col2, col3 = st.columns([3, 2, 4], vertical_alignment="center")
-
         with col1:
             st.write(f"### **{market_name} 即時行情**")
-
         with col2:
             if st.button("🔄 點擊刷新價格", key=f"btn_refresh_{market_name}"):
                 st.rerun()
-
         with col3:
             st.caption(f"⏱️ 最後更新時間 (台北): {now_taipei}")
 
         state_key = f"order_{market_name}"
 
-        # 首次載入：優先讀取 JSON 暫存檔
+        # 載入順序
         if state_key not in st.session_state:
-            if market_name in saved_cache:
+            if market_name in saved_order_cache:
                 valid_saved_order = [
-                    c for c in saved_cache[market_name] if c in stock_dict
+                    c for c in saved_order_cache[market_name] if c in stock_dict
                 ]
                 missing_codes = [
                     c for c in stock_dict.keys() if c not in valid_saved_order
@@ -159,8 +177,8 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
 
         current_order = st.session_state[state_key]
 
-        # ⚙️ 調整選單
-        with st.expander("⚙️ 點擊展開：手動調整股票上下順序 (自動存檔)"):
+        # ⚙️ 調整順序選單
+        with st.expander("⚙️ 點擊展開：手動調整股票上下順序"):
             for idx, code in enumerate(current_order):
                 col_name, col_up, col_down = st.columns([5, 1, 1])
                 name = stock_dict.get(code, code)
@@ -176,8 +194,8 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                             current_order[idx],
                         )
                         st.session_state[state_key] = current_order
-                        saved_cache[market_name] = current_order
-                        save_order_cache(saved_cache)
+                        saved_order_cache[market_name] = current_order
+                        save_order_cache(saved_order_cache)
                         st.rerun()
 
                 if col_down.button("⬇️", key=f"down_{market_name}_{code}"):
@@ -190,48 +208,187 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                             current_order[idx],
                         )
                         st.session_state[state_key] = current_order
-                        saved_cache[market_name] = current_order
-                        save_order_cache(saved_cache)
+                        saved_order_cache[market_name] = current_order
+                        save_order_cache(saved_order_cache)
                         st.rerun()
 
-        # 依順序讀取資料
+        # 抓取即時行情
         ordered_dict = {
             code: stock_dict[code]
             for code in current_order
             if code in stock_dict
         }
+        df_base = get_stock_info(ordered_dict)
 
-        df = get_stock_info(ordered_dict)
+        if not df_base.empty:
+            # 合併用戶先前輸入的自訂資料 (預期賣、上次賣、成本、數量、策略等)
+            rows = []
+            for _, row in df_base.iterrows():
+                code = row["股票代號"]
+                u_data = saved_user_data.get(str(code), {})
 
-        if not df.empty:
+                p = row["當前價格"]
 
-            def color_change(val):
-                try:
-                    if val > 0:
-                        return "color: #ff4b4b;"
-                    elif val < 0:
-                        return "color: #008000;"
-                except:
-                    pass
-                return ""
+                # 讀取輸入數值
+                exp_sell = u_data.get("預期賣", None)
+                last_sell = u_data.get("上次賣", None)
+                sell_qty = u_data.get("賣出數量", None)
+                exp_buy = u_data.get("預期買", None)
+                buy_qty = u_data.get("買進數量", None)
+                last_buy = u_data.get("上次買", None)
+                last_buy_qty = u_data.get("上次買數量", None)
+                cost = u_data.get("成本", None)
+                hold_qty = u_data.get("持股數量", None)
+                strategy = u_data.get("策略", "")
 
-            market_upper = market_name.upper()
-            if any(k in market_upper for k in ["中國", "CN", "美國", "US"]):
-                price_format = "{:.3f}"
-            else:
-                price_format = "{:.2f}"
+                # 綠色框公式計算 (%)
+                # 1. 預期賣 與現價% = (現價 - 預期賣) / 預期賣
+                exp_sell_pct = (
+                    ((p - exp_sell) / exp_sell * 100)
+                    if (p and exp_sell)
+                    else None
+                )
+                # 2. 上次賣 與現價% = (現價 - 上次賣) / 上次賣
+                last_sell_pct = (
+                    ((p - last_sell) / last_sell * 100)
+                    if (p and last_sell)
+                    else None
+                )
+                # 3. 預期買 與現價% = (預期買 - 現價) / 預期買
+                exp_buy_pct = (
+                    ((exp_buy - p) / exp_buy * 100)
+                    if (p and exp_buy)
+                    else None
+                )
+                # 4. 上次買 與現價% = (上次買 - 現價) / 上次買
+                last_buy_pct = (
+                    ((last_buy - p) / last_buy * 100)
+                    if (p and last_buy)
+                    else None
+                )
+                # 5. 成本 與現價% = (現價 - 成本) / 成本
+                cost_pct = (
+                    ((p - cost) / cost * 100) if (p and cost) else None
+                )
 
-            st.dataframe(
-                df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
-                .format(
-                    price_format,
-                    subset=["當前價格", "漲跌", "漲跌幅(%)"],
-                    na_rep="-",
-                ),
+                rows.append({
+                    "名稱": row["名稱"],
+                    "股票代號": row["股票代號"],
+                    "當前價格": row["當前價格"],
+                    "漲跌": row["漲跌"],
+                    "漲跌幅(%)": row["漲跌幅(%)"],
+                    "預期賣": (
+                        float(exp_sell) if exp_sell is not None else None
+                    ),
+                    "與現價%(賣)": exp_sell_pct,
+                    "上次賣": (
+                        float(last_sell) if last_sell is not None else None
+                    ),
+                    "與現價%(上次賣)": last_sell_pct,
+                    "賣出數量": (
+                        int(sell_qty) if sell_qty is not None else None
+                    ),
+                    "預期買": (
+                        float(exp_buy) if exp_buy is not None else None
+                    ),
+                    "與現價%(買)": exp_buy_pct,
+                    "買進數量": (
+                        int(buy_qty) if buy_qty is not None else None
+                    ),
+                    "上次買": (
+                        float(last_buy) if last_buy is not None else None
+                    ),
+                    "與現價%(上次買)": last_buy_pct,
+                    "上次買數量": (
+                        int(last_buy_qty) if last_buy_qty is not None else None
+                    ),
+                    "成本": float(cost) if cost is not None else None,
+                    "與現價%(成本)": cost_pct,
+                    "持股數量": (
+                        int(hold_qty) if hold_qty is not None else None
+                    ),
+                    "策略": strategy,
+                })
+
+            full_df = pd.DataFrame(rows)
+
+            # 使用 st.data_editor 呈現表格並開啟線上直接編輯
+            edited_df = st.data_editor(
+                full_df,
+                disabled=[
+                    "名稱",
+                    "股票代號",
+                    "當前價格",
+                    "漲跌",
+                    "漲跌幅(%)",
+                    "與現價%(賣)",
+                    "與現價%(上次賣)",
+                    "與現價%(買)",
+                    "與現價%(上次買)",
+                    "與現價%(成本)",
+                ],
+                column_config={
+                    "當前價格": st.column_config.NumberColumn(format="%.2f"),
+                    "漲跌": st.column_config.NumberColumn(format="%.2f"),
+                    "漲跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                    "與現價%(賣)": st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    ),
+                    "與現價%(上次賣)": st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    ),
+                    "與現價%(買)": st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    ),
+                    "與現價%(上次買)": st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    ),
+                    "與現價%(成本)": st.column_config.NumberColumn(
+                        format="%.1f%%"
+                    ),
+                    "策略": st.column_config.SelectboxColumn(
+                        options=["", "買進", "賣出", "觀望", "加碼"]
+                    ),
+                },
                 use_container_width=True,
-                height=300,
+                height=350,
+                key=f"editor_{market_name}",
             )
 
+            # 檢測使用者是否編輯表格並自動寫入 JSON
+            has_changed = False
+            for _, r in edited_df.iterrows():
+                code = str(r["股票代號"])
+                old_entry = saved_user_data.get(code, {})
+
+                new_entry = {
+                    "預期賣": r["預期賣"],
+                    "上次賣": r["上次賣"],
+                    "賣出數量": r["賣出數量"],
+                    "預期買": r["預期買"],
+                    "買進數量": r["買進數量"],
+                    "上次買": r["上次買"],
+                    "上次買數量": r["上次買數量"],
+                    "成本": r["成本"],
+                    "持股數量": r["持股數量"],
+                    "策略": r["策略"],
+                }
+
+                # 清除 None 值的鍵
+                new_entry = {
+                    k: v
+                    for k, v in new_entry.items()
+                    if pd.notna(v) and v != ""
+                }
+
+                if old_entry != new_entry:
+                    saved_user_data[code] = new_entry
+                    has_changed = True
+
+            if has_changed:
+                save_user_data(saved_user_data)
+                st.rerun()
+
 st.caption(
-    "💡 提示：點擊「手動調整股票上下順序」可調整位置；點擊表格標頭可快速按數字大小排序。"
+    "💡 提示：白底/灰色欄位可直接在網頁雙擊編輯；「與現價%」為自動計算欄位；修改後系統會自動存檔。"
 )
