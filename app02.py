@@ -42,7 +42,6 @@ def get_stock_info(stock_dict):
         pass
 
     df_list = []
-    # 按照傳入 stock_dict 的順序讀取
     for code, name in stock_dict.items():
         clean_code = str(code).split(".")[0]
         item = stock_data_map.get(clean_code)
@@ -105,22 +104,54 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
         st.write(f"**{market_name} 即時行情**")
 
-        # 功能 1：手動調整與篩選股票排列順序
-        ordered_codes = st.multiselect(
-            "↕️ 手動調整股票順序 (可拖曳或重新點選)：",
-            options=list(stock_dict.keys()),
-            default=list(stock_dict.keys()),
-            key=f"select_{market_name}",
-        )
+        # 初始化 Session State 來儲存手動排序後的股票清單
+        state_key = f"order_{market_name}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = list(stock_dict.keys())
 
-        # 依使用者調整後的順序重建字典
-        filtered_dict = {
+        current_order = st.session_state[state_key]
+
+        # ⚙️ 手動調整上下順序選單
+        with st.expander("⚙️ 點擊展開：手動調整股票上下順序"):
+            for idx, code in enumerate(current_order):
+                col_name, col_up, col_down = st.columns([5, 1, 1])
+                name = stock_dict.get(code, code)
+                col_name.write(f"{idx + 1}. **{name}** (`{code}`)")
+
+                # ⬆️ 上移按鈕
+                if col_up.button("⬆️", key=f"up_{market_name}_{code}"):
+                    if idx > 0:
+                        (
+                            current_order[idx],
+                            current_order[idx - 1],
+                        ) = (
+                            current_order[idx - 1],
+                            current_order[idx],
+                        )
+                        st.session_state[state_key] = current_order
+                        st.rerun()
+
+                # ⬇️ 下移按鈕
+                if col_down.button("⬇️", key=f"down_{market_name}_{code}"):
+                    if idx < len(current_order) - 1:
+                        (
+                            current_order[idx],
+                            current_order[idx + 1],
+                        ) = (
+                            current_order[idx + 1],
+                            current_order[idx],
+                        )
+                        st.session_state[state_key] = current_order
+                        st.rerun()
+
+        # 依手動調整後的順序讀取資料
+        ordered_dict = {
             code: stock_dict[code]
-            for code in ordered_codes
+            for code in current_order
             if code in stock_dict
         }
 
-        df = get_stock_info(filtered_dict)
+        df = get_stock_info(ordered_dict)
 
         if not df.empty:
 
@@ -134,13 +165,14 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                     pass
                 return ""
 
+            # 小數點位數切換
             market_upper = market_name.upper()
             if any(k in market_upper for k in ["中國", "CN", "美國", "US"]):
                 price_format = "{:.3f}"
             else:
                 price_format = "{:.2f}"
 
-            # 功能 2：st.dataframe 原生支援直接點擊標頭欄位排序 (數字/文字)
+            # 表格渲染（支援點擊欄位標頭自動排序）
             st.dataframe(
                 df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
                 .format(
@@ -158,7 +190,8 @@ now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 st.caption(f"最後更新時間 (台北): {now_taipei}")
 st.caption(
-    "💡 提示：點擊表格標題欄位可自動排序；使用上方多選框可手動拖曳變更股票顯示順序。"
+    "💡 提示：點擊「手動調整股票上下順序」可使用 ⬆️ ⬇️"
+    " 按鈕調整位置；點擊表格標題欄位可快速按數值排序。"
 )
 
 if st.button("🔄 點擊刷新價格"):
