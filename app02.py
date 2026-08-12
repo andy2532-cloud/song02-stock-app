@@ -6,8 +6,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
-# --- 從 stocks02.py 匯入清單 ---
-from stocks02 import market_configs
+# --- 從 stocks.py 匯入清單 ---
+from stocks import market_configs
 
 st.set_page_config(page_title="全球股票監控", layout="wide")
 st.markdown("#### 📊 全球股市即時監控 (雙軌智慧模式)")
@@ -42,6 +42,7 @@ def get_stock_info(stock_dict):
         pass
 
     df_list = []
+    # 按照傳入 stock_dict 的順序讀取
     for code, name in stock_dict.items():
         clean_code = str(code).split(".")[0]
         item = stock_data_map.get(clean_code)
@@ -103,7 +104,23 @@ tabs = st.tabs(list(market_configs.keys()))
 for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
         st.write(f"**{market_name} 即時行情**")
-        df = get_stock_info(stock_dict)
+
+        # 功能 1：手動調整與篩選股票排列順序
+        ordered_codes = st.multiselect(
+            "↕️ 手動調整股票順序 (可拖曳或重新點選)：",
+            options=list(stock_dict.keys()),
+            default=list(stock_dict.keys()),
+            key=f"select_{market_name}",
+        )
+
+        # 依使用者調整後的順序重建字典
+        filtered_dict = {
+            code: stock_dict[code]
+            for code in ordered_codes
+            if code in stock_dict
+        }
+
+        df = get_stock_info(filtered_dict)
 
         if not df.empty:
 
@@ -117,13 +134,13 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                     pass
                 return ""
 
-            # 判斷中國或美國股市：顯示 3 位小數點；其餘（如台股）顯示 2 位
             market_upper = market_name.upper()
             if any(k in market_upper for k in ["中國", "CN", "美國", "US"]):
                 price_format = "{:.3f}"
             else:
                 price_format = "{:.2f}"
 
+            # 功能 2：st.dataframe 原生支援直接點擊標頭欄位排序 (數字/文字)
             st.dataframe(
                 df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
                 .format(
@@ -140,7 +157,9 @@ taipei_tz = pytz.timezone("Asia/Taipei")
 now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 st.caption(f"最後更新時間 (台北): {now_taipei}")
-st.caption("註：上市上櫃資料來自 TWSE MIS；興櫃及海外股市資料來自 yfinance。")
+st.caption(
+    "💡 提示：點擊表格標題欄位可自動排序；使用上方多選框可手動拖曳變更股票顯示順序。"
+)
 
 if st.button("🔄 點擊刷新價格"):
     st.rerun()
