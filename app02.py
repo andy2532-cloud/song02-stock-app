@@ -6,8 +6,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
-# --- 從 stocks.py 匯入清單 ---
-from stocks import market_configs
+# --- 從 stocks02.py 匯入清單 ---
+from stocks02 import market_configs
 
 st.set_page_config(page_title="全球股票監控", layout="wide")
 st.markdown("#### 📊 全球股市即時監控 (雙軌智慧模式)")
