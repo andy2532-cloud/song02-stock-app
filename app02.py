@@ -1,3 +1,5 @@
+import json
+import os
 import time
 from datetime import datetime
 import pandas as pd
@@ -12,12 +14,34 @@ from stocks02 import market_configs
 st.set_page_config(page_title="全球股票監控", layout="wide")
 st.markdown("#### 📊 全球股市即時監控 (雙軌智慧模式)")
 
+# 暫存檔名稱
+CACHE_FILE = "stock_order_cache.json"
+
+
+# 讀取暫存檔
+def load_order_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+# 寫入暫存檔
+def save_order_cache(cache_data):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 
 def get_stock_info(stock_dict):
     if not stock_dict:
         return pd.DataFrame()
 
-    # 1. 整理清單，去除 .TW / .TWO 產出 TWSE 查詢字串
     targets = []
     for code in stock_dict.keys():
         clean_code = str(code).split(".")[0]
@@ -32,7 +56,6 @@ def get_stock_info(stock_dict):
         )
     }
 
-    # 先用 TWSE API 批次抓取台股上市上櫃資料
     stock_data_map = {}
     try:
         res = requests.get(url, headers=headers, timeout=4)
@@ -50,7 +73,6 @@ def get_stock_info(stock_dict):
         change = None
         change_pct = None
 
-        # 軌道 A: TWSE API 成功抓到上市/上櫃資料
         if item:
             try:
                 price_str = item.get("z", "-")
@@ -70,7 +92,6 @@ def get_stock_info(stock_dict):
             except Exception:
                 pass
 
-        # 軌道 B: 若 TWSE 抓不到 (興櫃股票、陸股、美股等)，自動改用 yfinance
         if current_price is None:
             try:
                 stock_obj = yf.Ticker(str(code))
@@ -97,28 +118,54 @@ def get_stock_info(stock_dict):
     return pd.DataFrame(df_list)
 
 
-# 分頁與表格渲染
+# 取得台北目前時間
+taipei_tz = pytz.timezone("Asia/Taipei")
+now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+# 載入歷史儲存順序
+saved_cache = load_order_cache()
+
 tabs = st.tabs(list(market_configs.keys()))
 
 for i, (market_name, stock_dict) in enumerate(market_configs.items()):
     with tabs[i]:
-        st.write(f"**{market_name} 即時行情**")
+        # --- 頂部橫向整排佈局 (標題 | 刷新按鈕 | 最後更新時間) ---
+        col1, col2, col3 = st.columns([3, 2, 4], vertical_alignment="center")
 
-        # 初始化 Session State 來儲存手動排序後的股票清單
+        with col1:
+            st.write(f"### **{market_name} 即時行情**")
+
+        with col2:
+            if st.button("🔄 點擊刷新價格", key=f"btn_refresh_{market_name}"):
+                st.rerun()
+
+        with col3:
+            st.caption(f"⏱️ 最後更新時間 (台北): {now_taipei}")
+
         state_key = f"order_{market_name}"
+
+        # 首次載入：優先讀取 JSON 暫存檔
         if state_key not in st.session_state:
-            st.session_state[state_key] = list(stock_dict.keys())
+            if market_name in saved_cache:
+                valid_saved_order = [
+                    c for c in saved_cache[market_name] if c in stock_dict
+                ]
+                missing_codes = [
+                    c for c in stock_dict.keys() if c not in valid_saved_order
+                ]
+                st.session_state[state_key] = valid_saved_order + missing_codes
+            else:
+                st.session_state[state_key] = list(stock_dict.keys())
 
         current_order = st.session_state[state_key]
 
-        # ⚙️ 手動調整上下順序選單
-        with st.expander("⚙️ 點擊展開：手動調整股票上下順序"):
+        # ⚙️ 調整選單
+        with st.expander("⚙️ 點擊展開：手動調整股票上下順序 (自動存檔)"):
             for idx, code in enumerate(current_order):
                 col_name, col_up, col_down = st.columns([5, 1, 1])
                 name = stock_dict.get(code, code)
                 col_name.write(f"{idx + 1}. **{name}** (`{code}`)")
 
-                # ⬆️ 上移按鈕
                 if col_up.button("⬆️", key=f"up_{market_name}_{code}"):
                     if idx > 0:
                         (
@@ -129,9 +176,10 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                             current_order[idx],
                         )
                         st.session_state[state_key] = current_order
+                        saved_cache[market_name] = current_order
+                        save_order_cache(saved_cache)
                         st.rerun()
 
-                # ⬇️ 下移按鈕
                 if col_down.button("⬇️", key=f"down_{market_name}_{code}"):
                     if idx < len(current_order) - 1:
                         (
@@ -142,9 +190,11 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                             current_order[idx],
                         )
                         st.session_state[state_key] = current_order
+                        saved_cache[market_name] = current_order
+                        save_order_cache(saved_cache)
                         st.rerun()
 
-        # 依手動調整後的順序讀取資料
+        # 依順序讀取資料
         ordered_dict = {
             code: stock_dict[code]
             for code in current_order
@@ -158,21 +208,19 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
             def color_change(val):
                 try:
                     if val > 0:
-                        return "color: #ff4b4b;"  # 紅漲
+                        return "color: #ff4b4b;"
                     elif val < 0:
-                        return "color: #008000;"  # 綠跌
+                        return "color: #008000;"
                 except:
                     pass
                 return ""
 
-            # 小數點位數切換
             market_upper = market_name.upper()
             if any(k in market_upper for k in ["中國", "CN", "美國", "US"]):
                 price_format = "{:.3f}"
             else:
                 price_format = "{:.2f}"
 
-            # 表格渲染（支援點擊欄位標頭自動排序）
             st.dataframe(
                 df.style.map(color_change, subset=["漲跌", "漲跌幅(%)"])
                 .format(
@@ -184,15 +232,6 @@ for i, (market_name, stock_dict) in enumerate(market_configs.items()):
                 height=300,
             )
 
-# 時間顯示
-taipei_tz = pytz.timezone("Asia/Taipei")
-now_taipei = datetime.now(taipei_tz).strftime("%Y-%m-%d %H:%M:%S")
-
-st.caption(f"最後更新時間 (台北): {now_taipei}")
 st.caption(
-    "💡 提示：點擊「手動調整股票上下順序」可使用 ⬆️ ⬇️"
-    " 按鈕調整位置；點擊表格標題欄位可快速按數值排序。"
+    "💡 提示：點擊「手動調整股票上下順序」可調整位置；點擊表格標頭可快速按數字大小排序。"
 )
-
-if st.button("🔄 點擊刷新價格"):
-    st.rerun()
